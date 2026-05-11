@@ -1,0 +1,400 @@
+﻿<Window x:Class="VideoDB.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="VideoDB Metadata Explorer"
+        Height="720"
+        Width="1180"
+        MinHeight="560"
+        MinWidth="960"
+        Background="{DynamicResource AppBackgroundBrush}"
+        Foreground="{DynamicResource TextBrush}">
+    <Grid Background="{DynamicResource AppBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="8">
+            <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                <Button Content="Scan" Width="82" Height="30" Margin="0,0,8,0" Click="ScanButton_Click"/>
+                <Button Content="Options" Width="82" Height="30" Margin="0,0,8,0" Click="OptionsButton_Click"/>
+                <Button Content="Write IDs" Width="86" Height="30" Margin="0,0,8,0" Click="WriteIdsButton_Click"/>
+                <Button Content="Clear Filters" Width="104" Height="30" Margin="0,0,8,0" Click="ClearFiltersButton_Click"/>
+                <Button Content="Delete Scene" Width="106" Height="30" Margin="0,0,14,0" Click="DeleteSceneButton_Click"/>
+                <Button x:Name="ThemeToggleButton" Content="Dark" Width="76" Height="30" Margin="0,0,14,0" Click="ThemeToggleButton_Click"/>
+
+                <ComboBox x:Name="SceneTagBox"
+                          Width="150"
+                          Height="30"
+                          Margin="0,0,6,0"
+                          IsEditable="True"
+                          IsTextSearchEnabled="True"/>
+                <Button Content="Add Tag"
+                        Width="76"
+                        Height="30"
+                        Margin="0,0,10,0"
+                        Click="AddSceneTagButton_Click"/>
+
+                <ComboBox x:Name="SceneActressBox"
+                          Width="150"
+                          Height="30"
+                          Margin="0,0,6,0"
+                          IsEditable="True"
+                          IsTextSearchEnabled="True"/>
+                <Button Content="Add Actress"
+                        Width="94"
+                        Height="30"
+                        Click="AddSceneActressButton_Click"/>
+            </StackPanel>
+            <TextBlock x:Name="StatusTextBlock"
+                       DockPanel.Dock="Right"
+                       VerticalAlignment="Center"
+                       Foreground="{DynamicResource MutedTextBrush}"
+                       Text="F8 captures current MPC-HC scene"/>
+        </DockPanel>
+
+        <Border Grid.Row="1" BorderThickness="0,1,0,1" Padding="8,6">
+            <ItemsControl x:Name="ActiveFilterItemsControl">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button Tag="{Binding}" Margin="0,0,6,0" Padding="10,4" Click="ActiveFilterButton_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Label}"/>
+                                <TextBlock Text=" x"/>
+                            </StackPanel>
+                        </Button>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="TagsColumn" Width="1.1*" MinWidth="180"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition x:Name="ScenesColumn" Width="2.8*" MinWidth="360"/>
+                <ColumnDefinition Width="6"/>
+                <ColumnDefinition x:Name="ActressesColumn" Width="1.1*" MinWidth="180"/>
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" BorderThickness="1" Margin="0,0,8,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Tags" FontWeight="SemiBold" Margin="8,8,8,4"/>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" BorderThickness="0">
+                        <ItemsControl x:Name="TagChipItemsControl" Margin="8,4,8,8">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Tag="{Binding}"
+                                            Margin="0,0,7,7"
+                                            Padding="10,5"
+                                            Click="TagChipFilterButton_Click">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource FilterChipButtonStyle}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource SelectionBrush}"/>
+                                                        <Setter Property="Foreground" Value="{DynamicResource SelectionTextBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Name}"/>
+                                            <TextBlock Text="{Binding Count}" Margin="8,0,0,0" Foreground="{DynamicResource MutedTextBrush}"/>
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <GridSplitter Grid.Column="1"
+                          Width="6"
+                          HorizontalAlignment="Stretch"
+                          Background="{DynamicResource BorderBrush}"/>
+
+            <Border Grid.Column="2" BorderThickness="1" Margin="0,0,8,0">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top" Text="Scenes" FontWeight="SemiBold" Margin="8,8,8,4"/>
+                    <Border x:Name="SceneFilterBar"
+                            DockPanel.Dock="Top"
+                            BorderThickness="0,0,0,1"
+                            Padding="8,4,8,8"
+                            Visibility="Collapsed">
+                        <StackPanel Orientation="Horizontal">
+                            <ComboBox x:Name="SceneSortBox"
+                                      Width="130"
+                                      Height="30"
+                                      Margin="0,0,8,0"
+                                      SelectedIndex="0"
+                                      SelectionChanged="SceneSortBox_SelectionChanged">
+                                <ComboBoxItem Content="Rating ↓"/>
+                                <ComboBoxItem Content="Rating ↑"/>
+                                <ComboBoxItem Content="Newest"/>
+                                <ComboBoxItem Content="Oldest"/>
+                                <ComboBoxItem Content="Video ID"/>
+                            </ComboBox>
+                            <ItemsControl x:Name="RatingFilterChipItemsControl">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Tag="{Binding}"
+                                                Margin="0,0,6,0"
+                                                Padding="10,5"
+                                                Click="RatingFilterChipButton_Click">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource FilterChipButtonStyle}">
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                            <Setter Property="Background" Value="{DynamicResource SelectionBrush}"/>
+                                                            <Setter Property="BorderBrush" Value="{DynamicResource SelectionBrush}"/>
+                                                            <Setter Property="Foreground" Value="{DynamicResource SelectionTextBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                            <TextBlock Text="{Binding Label}"/>
+                                        </Button>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                    <ListBox x:Name="SceneGrid"
+                             BorderThickness="0"
+                             SelectionMode="Single"
+                             SelectionChanged="SceneGrid_SelectionChanged"
+                             MouseDoubleClick="SceneGrid_MouseDoubleClick"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel/>
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Margin" Value="6"/>
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="SelectedFrame"
+                                                    BorderThickness="1"
+                                                    BorderBrush="Transparent"
+                                                    CornerRadius="9">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="SelectedFrame" Property="BorderBrush" Value="{DynamicResource SelectionBrush}"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Border Width="210"
+                                        MinHeight="238"
+                                        Padding="10"
+                                        CornerRadius="9"
+                                        Background="{DynamicResource ControlBackgroundBrush}"
+                                        BorderBrush="{DynamicResource BorderBrush}"
+                                        BorderThickness="1">
+                                    <StackPanel>
+                                        <ItemsControl ItemsSource="{Binding Actresses}" MinHeight="28">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><WrapPanel HorizontalAlignment="Center"/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Content="{Binding}"
+                                                            Tag="{Binding DataContext.EventID, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                            Margin="2"
+                                                            Padding="7,2"
+                                                            Click="RemoveActressChipButton_Click"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+
+                                        <Border Margin="0,8,0,8" CornerRadius="6" ClipToBounds="True" HorizontalAlignment="Center">
+                                            <Image Width="188"
+                                                   Height="106"
+                                                   Stretch="UniformToFill"
+                                                   Source="{Binding ThumbnailPath}"/>
+                                        </Border>
+
+                                        <StackPanel Orientation="Horizontal"
+                                                    HorizontalAlignment="Center"
+                                                    Margin="0,0,0,8">
+                                            <Button Content="{Binding Star1}"
+                                                    Tag="{Binding EventID}"
+                                                    ToolTip="Rating 1"
+                                                    Padding="2,0"
+                                                    Margin="1,0"
+                                                    Click="SceneStarButton_Click"/>
+                                            <Button Content="{Binding Star2}"
+                                                    Tag="{Binding EventID}"
+                                                    ToolTip="Rating 2"
+                                                    Padding="2,0"
+                                                    Margin="1,0"
+                                                    Click="SceneStarButton_Click"/>
+                                            <Button Content="{Binding Star3}"
+                                                    Tag="{Binding EventID}"
+                                                    ToolTip="Rating 3"
+                                                    Padding="2,0"
+                                                    Margin="1,0"
+                                                    Click="SceneStarButton_Click"/>
+                                            <Button Content="{Binding Star4}"
+                                                    Tag="{Binding EventID}"
+                                                    ToolTip="Rating 4"
+                                                    Padding="2,0"
+                                                    Margin="1,0"
+                                                    Click="SceneStarButton_Click"/>
+                                            <Button Content="{Binding Star5}"
+                                                    Tag="{Binding EventID}"
+                                                    ToolTip="Rating 5"
+                                                    Padding="2,0"
+                                                    Margin="1,0"
+                                                    Click="SceneStarButton_Click"/>
+                                        </StackPanel>
+
+                                        <ItemsControl ItemsSource="{Binding Tags}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate><WrapPanel HorizontalAlignment="Center"/></ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Button Content="{Binding}"
+                                                            Tag="{Binding DataContext.EventID, RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                            Margin="2"
+                                                            Padding="7,2"
+                                                            Click="RemoveTagChipButton_Click"/>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <GridSplitter Grid.Column="3"
+                          Width="6"
+                          HorizontalAlignment="Stretch"
+                          Background="{DynamicResource BorderBrush}"/>
+
+            <Border Grid.Column="4" BorderThickness="1">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="2*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="1.15*"/>
+                    </Grid.RowDefinitions>
+
+                    <DockPanel Grid.Row="0">
+                    <TextBlock DockPanel.Dock="Top" Text="Actresses" FontWeight="SemiBold" Margin="8,8,8,4"/>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" BorderThickness="0">
+                        <ItemsControl x:Name="ActressChipItemsControl" Margin="8,4,8,8">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <WrapPanel/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Tag="{Binding}"
+                                            Margin="0,0,7,7"
+                                            Padding="10,5"
+                                            Click="ActressChipFilterButton_Click">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource FilterChipButtonStyle}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource SelectionBrush}"/>
+                                                        <Setter Property="Foreground" Value="{DynamicResource SelectionTextBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding Name}"/>
+                                            <TextBlock Text="{Binding Count}" Margin="8,0,0,0" Foreground="{DynamicResource MutedTextBrush}"/>
+                                        </StackPanel>
+                                    </Button>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                    </DockPanel>
+
+                    <Border Grid.Row="1" BorderThickness="0,1,0,0" Margin="0,8,0,0"/>
+
+                    <Grid Grid.Row="2" Margin="8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="82"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Video Details" FontWeight="SemiBold" Margin="0,0,0,6"/>
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="Video ID" Margin="0,0,8,4"/>
+                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="DetailVideoIdTextBlock" Text="-" TextTrimming="CharacterEllipsis"/>
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="File Name" Margin="0,0,8,4"/>
+                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="DetailFileNameTextBlock" Text="-" TextTrimming="CharacterEllipsis"/>
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="Metadata" Margin="0,0,8,4"/>
+                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal">
+                            <TextBlock x:Name="DetailMetadataIdTextBlock" Text="-" TextTrimming="CharacterEllipsis"/>
+                            <Button Content="Resolve" Width="68" Height="22" Margin="8,0,0,0" Click="ResolveVideoIdButton_Click"/>
+                        </StackPanel>
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="State" Margin="0,0,8,4"/>
+                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="DetailStateTextBlock" Text="-"/>
+
+                        <TextBox Grid.Row="5"
+                                 Grid.ColumnSpan="2"
+                                 x:Name="DetailPathTextBox"
+                                 Text="-"
+                                 IsReadOnly="True"
+                                 TextWrapping="Wrap"
+                                 VerticalScrollBarVisibility="Auto"/>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
