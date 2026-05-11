@@ -17,9 +17,38 @@ Local video scene database for Windows.
 
 ## Requirements
 
-- Windows 10/11
-- MPC-HC
-- ffmpeg.exe
+### Media Player Classic - Home Cinema (MPC-HC)
+
+VideoDB currently integrates with:
+
+- Media Player Classic - Home Cinema (MPC-HC)
+
+Download:
+https://github.com/clsid2/mpc-hc
+
+Enable the MPC-HC Web Interface:
+
+View → Options → Player → Web Interface
+
+Default port:
+13579
+
+---
+
+### ffmpeg
+
+VideoDB uses ffmpeg to generate scene thumbnail previews.
+
+Download:
+https://www.gyan.dev/ffmpeg/builds/
+
+Place:
+
+ffmpeg.exe
+
+beside:
+
+VideoDB.exe
 
 ## Status
 
