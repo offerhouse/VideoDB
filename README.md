@@ -13,4 +13,4 @@ Local video scene database for Windows.
 
 ## Screenshot
 
-![Main UI](screenshots/main-ui-dark.png)
+![Main UI](screenshots/screenshot_01.png)
