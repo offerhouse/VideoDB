@@ -33,6 +33,8 @@ View → Options → Player → Web Interface
 Default port:
 13579
 
+![mpc_hc_web_interface](screenshots/mpc_hc_web_interface.png)
+
 ---
 
 ### ffmpeg
