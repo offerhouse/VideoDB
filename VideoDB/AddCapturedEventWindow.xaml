@@ -28,6 +28,8 @@
             </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="86"/>
+                <ColumnDefinition Width="318"/>
+                <ColumnDefinition Width="14"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -85,7 +87,68 @@
             <TextBlock Grid.Row="5" Grid.Column="0" Text="Note" VerticalAlignment="Top" Margin="0,4,8,8"/>
             <TextBox Grid.Row="5" Grid.Column="1" x:Name="NoteBox" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" Margin="0,0,0,12"/>
 
-            <StackPanel Grid.Row="6" Grid.ColumnSpan="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Border Grid.Row="2"
+                    Grid.RowSpan="3"
+                    Grid.Column="3"
+                    Background="{DynamicResource PanelBackgroundBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="1"
+                    Padding="8"
+                    Margin="0,0,0,12">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="Recent Tags"
+                               FontFamily="Segoe UI Semibold"
+                               Margin="0,0,0,8"/>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="RecentTagItemsControl">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Content="{Binding}"
+                                            Margin="2"
+                                            Padding="8,3"
+                                            Click="RecentTagButton_Click"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <Border Grid.Row="5"
+                    Grid.Column="3"
+                    Background="{DynamicResource PanelBackgroundBrush}"
+                    BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="1"
+                    Padding="8"
+                    Margin="0,0,0,12">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Top"
+                               Text="Recent Actresses"
+                               FontFamily="Segoe UI Semibold"
+                               Margin="0,0,0,8"/>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <ItemsControl x:Name="RecentActressItemsControl">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Button Content="{Binding}"
+                                            Margin="2"
+                                            Padding="8,3"
+                                            Click="RecentActressButton_Click"/>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <StackPanel Grid.Row="6" Grid.ColumnSpan="4" Orientation="Horizontal" HorizontalAlignment="Right">
                 <Button Content="Save" Width="90" Height="30" Margin="0,0,8,0" IsDefault="True" Click="SaveButton_Click"/>
                 <Button Content="Cancel" Width="90" Height="30" IsCancel="True"/>
             </StackPanel>

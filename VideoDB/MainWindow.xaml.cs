@@ -4,6 +4,8 @@ using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
@@ -15,19 +17,29 @@ namespace VideoDB
 {
     public partial class MainWindow : Window
     {
-        private const int HotkeyId = 9001;
+        private const int CaptureHotkeyId = 9001;
+        private const int SceneCountHotkeyId = 9002;
         private const int WmHotkey = 0x0312;
         private const uint ModNoRepeat = 0x4000;
         private const uint VkF8 = 0x77;
+        private const uint VkF9 = 0x78;
         private const string DatabasePath = "Data Source=video.db";
         private const string ScanRootPath = @"D:\_AVDB\Fake_Dir";
         private const string DefaultMpcPath = @"C:\Program Files (x86)\K-Lite Codec Pack\MPC-HC64\mpc-hc64.exe";
+        private const string DefaultVlcPath = @"C:\Program Files\VideoLAN\VLC\vlc.exe";
 
         private readonly HttpClient httpClient = new HttpClient() { Timeout = TimeSpan.FromSeconds(2) };
+        private readonly SemaphoreSlim playbackControlLock = new SemaphoreSlim(1, 1);
         private readonly List<SceneItem> allScenes = new List<SceneItem>();
         private readonly Dictionary<string, bool> metadataWritePendingByPath = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         private HwndSource? hwndSource;
         private bool isCapturingFromMpc;
+        private bool isCheckingMpcSceneCount;
+        private bool isSceneCountButtonHeld;
+        private int sceneCountPopupRequestId;
+        private SceneCountPopupWindow? sceneCountPopupWindow;
+        private int? rememberedPlaybackPositionSeconds;
+        private MediaPlayerKind lastActiveMediaPlayer = MediaPlayerKind.Mpc;
         private bool allScenesFullyLoaded;
         private string? activeTag;
         private string? activeActress;
@@ -37,12 +49,18 @@ namespace VideoDB
 
         public MainWindow()
         {
+            App.LogStartup("MainWindow constructor started");
             InitializeComponent();
+            App.LogStartup("MainWindow XAML initialized");
             ConfigureInitialWindowSize();
+            App.LogStartup("Initial window size configured");
             InitializeDatabase();
+            App.LogStartup("Database initialized: " + Path.GetFullPath("video.db"));
             ApplyTheme(LoadSetting("Theme", "Dark"));
+            App.LogStartup("Theme applied");
             RestoreLayoutColumnWidths();
             RefreshExplorerWithoutScenesOnStartup();
+            App.LogStartup("MainWindow initialization completed");
         }
 
         [DllImport("user32.dll")]
@@ -114,8 +132,20 @@ namespace VideoDB
 
         private class MpcStatus
         {
+            public MediaPlayerKind Player { get; set; }
             public string Path { get; set; } = string.Empty;
             public string Time { get; set; } = string.Empty;
+            public int PositionSeconds { get; set; }
+            public int DurationSeconds { get; set; }
+            public bool IsPlaying { get; set; }
+        }
+
+        // Keep player-specific commands behind this boundary so VLC can be added later.
+        private enum MediaPlayerKind
+        {
+            Auto,
+            Mpc,
+            Vlc
         }
 
         private class MetadataWriteResult
@@ -132,6 +162,13 @@ namespace VideoDB
             public bool MetadataWritePending { get; set; }
         }
 
+        private class SceneCountLookupResult
+        {
+            public bool VideoFound { get; set; }
+            public string VideoID { get; set; } = string.Empty;
+            public int SceneCount { get; set; }
+        }
+
         protected override void OnSourceInitialized(EventArgs e)
         {
             base.OnSourceInitialized(e);
@@ -140,9 +177,14 @@ namespace VideoDB
             hwndSource = HwndSource.FromHwnd(handle);
             hwndSource?.AddHook(WndProc);
 
-            if (!RegisterHotKey(handle, HotkeyId, ModNoRepeat, VkF8))
+            if (!RegisterHotKey(handle, CaptureHotkeyId, ModNoRepeat, VkF8))
             {
                 StatusTextBlock.Text = "F8 hotkey registration failed";
+            }
+
+            if (!RegisterHotKey(handle, SceneCountHotkeyId, ModNoRepeat, VkF9))
+            {
+                StatusTextBlock.Text = "F9 popup hotkey registration failed";
             }
         }
 
@@ -232,7 +274,6 @@ namespace VideoDB
                 SetSystemBrushes("#1F1F1F", "#EAEAEA", "#2D2D30", "#EAEAEA");
             }
 
-            ThemeToggleButton.Content = currentTheme;
         }
 
         private void SetBrush(string key, string color)
@@ -265,7 +306,11 @@ namespace VideoDB
                 hwndSource.RemoveHook(WndProc);
             }
 
-            UnregisterHotKey(new WindowInteropHelper(this).Handle, HotkeyId);
+            IntPtr handle = new WindowInteropHelper(this).Handle;
+            UnregisterHotKey(handle, CaptureHotkeyId);
+            UnregisterHotKey(handle, SceneCountHotkeyId);
+            SaveSceneCountPopupPosition();
+            sceneCountPopupWindow?.Close();
             SaveLayoutColumnWidths();
             httpClient.Dispose();
             base.OnClosed(e);
@@ -273,13 +318,423 @@ namespace VideoDB
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
-            if (msg == WmHotkey && wParam.ToInt32() == HotkeyId)
+            if (msg == WmHotkey && wParam.ToInt32() == CaptureHotkeyId)
             {
                 handled = true;
                 _ = CaptureEventFromMpcAsync();
             }
+            else if (msg == WmHotkey && wParam.ToInt32() == SceneCountHotkeyId)
+            {
+                handled = true;
+                ShowSceneCountToolPopup();
+            }
 
             return IntPtr.Zero;
+        }
+
+        private void ShowSceneCountToolPopup()
+        {
+            SceneCountPopupWindow popup = EnsureSceneCountPopupWindow();
+
+            if (!popup.IsVisible)
+            {
+                popup.SetIdleText();
+                popup.Show();
+            }
+
+            popup.Topmost = false;
+            popup.Topmost = true;
+        }
+
+        private async Task ShowMpcSceneCountInToolPopupAsync()
+        {
+            isSceneCountButtonHeld = true;
+            int requestId = ++sceneCountPopupRequestId;
+            ShowSceneCountPopup("...", "Checking MPC");
+
+            if (isCheckingMpcSceneCount)
+                return;
+
+            isCheckingMpcSceneCount = true;
+
+            try
+            {
+                MpcStatus? status = await GetActiveMediaPlayerStatusAsync();
+
+                if (!isSceneCountButtonHeld || requestId != sceneCountPopupRequestId)
+                    return;
+
+                if (status == null || string.IsNullOrWhiteSpace(status.Path))
+                {
+                    ShowSceneCountPopup("?", "Player status unavailable");
+                    return;
+                }
+
+                SceneCountLookupResult result = GetRecordedSceneCountForMpcPath(status.Path);
+                string detail =
+                    result.VideoFound
+                        ? result.VideoID
+                        : "No DB video record";
+
+                ShowSceneCountPopup(result.SceneCount.ToString(CultureInfo.InvariantCulture), detail);
+            }
+            catch (HttpRequestException)
+            {
+                if (isSceneCountButtonHeld && requestId == sceneCountPopupRequestId)
+                    ShowSceneCountPopup("!", "Player interface unreachable");
+            }
+            catch (TaskCanceledException)
+            {
+                if (isSceneCountButtonHeld && requestId == sceneCountPopupRequestId)
+                    ShowSceneCountPopup("!", "Player did not respond");
+            }
+            catch (JsonException)
+            {
+                if (isSceneCountButtonHeld && requestId == sceneCountPopupRequestId)
+                    ShowSceneCountPopup("!", "VLC response could not be parsed");
+            }
+            catch (InvalidOperationException ex)
+            {
+                if (isSceneCountButtonHeld && requestId == sceneCountPopupRequestId)
+                    ShowSceneCountPopup("!", ex.Message);
+            }
+            finally
+            {
+                isCheckingMpcSceneCount = false;
+            }
+        }
+
+        private void ShowSceneCountPopup(string countText, string detailText)
+        {
+            SceneCountPopupWindow popup = EnsureSceneCountPopupWindow();
+            popup.SetText(countText, detailText);
+
+            if (!popup.IsVisible)
+                popup.Show();
+
+            popup.Topmost = false;
+            popup.Topmost = true;
+        }
+
+        private void HideSceneCountPopup()
+        {
+            isSceneCountButtonHeld = false;
+            sceneCountPopupRequestId++;
+            SaveSceneCountPopupPosition();
+            sceneCountPopupWindow?.Hide();
+        }
+
+        private void ResetSceneCountPopupText()
+        {
+            isSceneCountButtonHeld = false;
+            sceneCountPopupRequestId++;
+            sceneCountPopupWindow?.SetIdleText();
+        }
+
+        private SceneCountPopupWindow EnsureSceneCountPopupWindow()
+        {
+            if (sceneCountPopupWindow != null)
+                return sceneCountPopupWindow;
+
+            sceneCountPopupWindow =
+                new SceneCountPopupWindow()
+                {
+                    WindowStartupLocation = WindowStartupLocation.Manual
+                };
+
+            sceneCountPopupWindow.CaptureRequested += SceneCountPopup_CaptureRequested;
+            sceneCountPopupWindow.SceneCountPressed += SceneCountPopup_SceneCountPressed;
+            sceneCountPopupWindow.SceneCountReleased += SceneCountPopup_SceneCountReleased;
+            sceneCountPopupWindow.RememberPositionRequested += SceneCountPopup_RememberPositionRequested;
+            sceneCountPopupWindow.ReturnToPositionRequested += SceneCountPopup_ReturnToPositionRequested;
+            sceneCountPopupWindow.SeekRequested += SceneCountPopup_SeekRequested;
+            sceneCountPopupWindow.CloseRequested += SceneCountPopup_CloseRequested;
+            RefreshRememberedPositionText();
+            RestoreSceneCountPopupPosition(sceneCountPopupWindow);
+            return sceneCountPopupWindow;
+        }
+
+        private void SceneCountPopup_CaptureRequested(object? sender, EventArgs e)
+        {
+            _ = CaptureEventFromMpcAsync();
+        }
+
+        private void SceneCountPopup_SceneCountPressed(object? sender, EventArgs e)
+        {
+            _ = ShowMpcSceneCountInToolPopupAsync();
+        }
+
+        private void SceneCountPopup_SceneCountReleased(object? sender, EventArgs e)
+        {
+            ResetSceneCountPopupText();
+        }
+
+        private void SceneCountPopup_CloseRequested(object? sender, EventArgs e)
+        {
+            HideSceneCountPopup();
+        }
+
+        private void SceneCountPopup_RememberPositionRequested(object? sender, EventArgs e)
+        {
+            _ = RememberPlaybackPositionAsync();
+        }
+
+        private void SceneCountPopup_ReturnToPositionRequested(object? sender, EventArgs e)
+        {
+            if (rememberedPlaybackPositionSeconds is not int seconds)
+            {
+                sceneCountPopupWindow?.SetPlaybackStatus("尚未記錄播放時間");
+                return;
+            }
+
+            _ = SeekActiveMediaPlayerAsync(seconds);
+        }
+
+        private void SceneCountPopup_SeekRequested(object? sender, int seconds)
+        {
+            _ = SeekActiveMediaPlayerRelativeAsync(seconds);
+        }
+
+        private async Task RememberPlaybackPositionAsync()
+        {
+            await RunPlaybackCommandAsync(async () =>
+            {
+                MpcStatus? status = await GetActiveMediaPlayerStatusAsync();
+
+                if (status == null)
+                    throw new InvalidOperationException("無法取得 MPC 播放時間");
+
+                rememberedPlaybackPositionSeconds = status.PositionSeconds;
+                RefreshRememberedPositionText();
+            });
+        }
+
+        private async Task SeekActiveMediaPlayerRelativeAsync(int offsetSeconds)
+        {
+            MediaPlayerKind configuredPlayer = GetConfiguredPlayerMode();
+
+            if (configuredPlayer == MediaPlayerKind.Vlc ||
+                configuredPlayer == MediaPlayerKind.Auto && lastActiveMediaPlayer == MediaPlayerKind.Vlc)
+            {
+                await RunPlaybackCommandAsync(() => SeekVlcRelativeAsync(offsetSeconds));
+                return;
+            }
+
+            await RunPlaybackCommandAsync(async () =>
+            {
+                MpcStatus? status = await GetActiveMediaPlayerStatusAsync();
+
+                if (status == null)
+                    throw new InvalidOperationException("無法取得 MPC 播放時間");
+
+                int targetSeconds = Math.Max(0, status.PositionSeconds + offsetSeconds);
+
+                if (status.DurationSeconds > 0)
+                    targetSeconds = Math.Min(targetSeconds, status.DurationSeconds);
+
+                if (status.Player == MediaPlayerKind.Vlc)
+                    await SeekVlcRelativeAsync(offsetSeconds);
+                else
+                    await SeekActiveMediaPlayerCoreAsync(targetSeconds);
+            });
+        }
+
+        private async Task SeekActiveMediaPlayerAsync(int targetSeconds)
+        {
+            await RunPlaybackCommandAsync(() => SeekActiveMediaPlayerCoreAsync(Math.Max(0, targetSeconds)));
+        }
+
+        private Task<MpcStatus?> GetActiveMediaPlayerStatusAsync()
+        {
+            MediaPlayerKind configuredPlayer = GetConfiguredPlayerMode();
+
+            if (configuredPlayer != MediaPlayerKind.Auto)
+            {
+                return GetMediaPlayerStatusAsync(configuredPlayer);
+            }
+
+            return GetAutomaticallyDetectedPlayerStatusAsync();
+        }
+
+        private async Task<MpcStatus?> GetAutomaticallyDetectedPlayerStatusAsync()
+        {
+            MpcStatus? vlcStatus = await TryGetMediaPlayerStatusAsync(MediaPlayerKind.Vlc);
+            MpcStatus? mpcStatus = await TryGetMediaPlayerStatusAsync(MediaPlayerKind.Mpc);
+            MpcStatus? selected =
+                vlcStatus?.IsPlaying == true ? vlcStatus :
+                mpcStatus?.IsPlaying == true ? mpcStatus :
+                vlcStatus ?? mpcStatus;
+
+            if (selected != null)
+                lastActiveMediaPlayer = selected.Player;
+
+            return selected;
+        }
+
+        private async Task<MpcStatus?> TryGetMediaPlayerStatusAsync(MediaPlayerKind player)
+        {
+            try
+            {
+                return await GetMediaPlayerStatusAsync(player);
+            }
+            catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException || ex is JsonException)
+            {
+                return null;
+            }
+        }
+
+        private async Task<MpcStatus?> GetMediaPlayerStatusAsync(MediaPlayerKind player)
+        {
+            MpcStatus? status = player switch
+            {
+                MediaPlayerKind.Mpc => await GetMpcStatusAsync(),
+                MediaPlayerKind.Vlc => await GetVlcStatusAsync(),
+                _ => null
+            };
+
+            if (status != null)
+                lastActiveMediaPlayer = status.Player;
+
+            return status;
+        }
+
+        private Task SeekActiveMediaPlayerCoreAsync(int targetSeconds)
+        {
+            MediaPlayerKind player = GetConfiguredPlayerMode();
+
+            if (player == MediaPlayerKind.Auto)
+                player = lastActiveMediaPlayer;
+
+            return player switch
+            {
+                MediaPlayerKind.Mpc => SeekMpcAsync(targetSeconds),
+                MediaPlayerKind.Vlc => SeekVlcAsync(targetSeconds),
+                _ => throw new NotSupportedException()
+            };
+        }
+
+        private async Task SeekMpcAsync(int targetSeconds)
+        {
+            string position = FormatPlaybackPosition(targetSeconds);
+            string url = "http://127.0.0.1:13579/command.html?wm_command=-1&position=" +
+                         Uri.EscapeDataString(position);
+            using HttpResponseMessage response = await httpClient.GetAsync(url);
+            response.EnsureSuccessStatusCode();
+            sceneCountPopupWindow?.SetPlaybackStatus("MPC → " + FormatPlaybackPositionChinese(targetSeconds));
+        }
+
+        private async Task SeekVlcAsync(int targetSeconds)
+        {
+            string query = "command=seek&val=" + targetSeconds.ToString(CultureInfo.InvariantCulture);
+            using JsonDocument ignored = await GetVlcJsonAsync("/requests/status.json", query);
+            sceneCountPopupWindow?.SetPlaybackStatus("VLC → " + FormatPlaybackPositionChinese(targetSeconds));
+        }
+
+        private async Task SeekVlcRelativeAsync(int offsetSeconds)
+        {
+            string relativeValue = (offsetSeconds >= 0 ? "+" : string.Empty) +
+                                   offsetSeconds.ToString(CultureInfo.InvariantCulture) + "S";
+            string query = "command=seek&val=" + Uri.EscapeDataString(relativeValue);
+            using JsonDocument status = await GetVlcJsonAsync("/requests/status.json", query);
+            int positionSeconds = GetJsonInt32(status.RootElement, "time");
+            sceneCountPopupWindow?.SetPlaybackStatus(
+                "VLC " + (offsetSeconds >= 0 ? "+" : string.Empty) + offsetSeconds +
+                " 秒 → " + FormatPlaybackPositionChinese(positionSeconds));
+        }
+
+        private MediaPlayerKind GetConfiguredPlayerMode()
+        {
+            string mode = LoadSetting("PlayerMode", "Auto");
+
+            return string.Equals(mode, "VLC", StringComparison.OrdinalIgnoreCase) ? MediaPlayerKind.Vlc :
+                   string.Equals(mode, "MPC", StringComparison.OrdinalIgnoreCase) ? MediaPlayerKind.Mpc :
+                   MediaPlayerKind.Auto;
+        }
+
+        private async Task RunPlaybackCommandAsync(Func<Task> command)
+        {
+            await playbackControlLock.WaitAsync();
+
+            try
+            {
+                await command();
+            }
+            catch (HttpRequestException)
+            {
+                sceneCountPopupWindow?.SetPlaybackStatus("無法連線播放器控制介面");
+            }
+            catch (TaskCanceledException)
+            {
+                sceneCountPopupWindow?.SetPlaybackStatus("播放器控制介面沒有回應");
+            }
+            catch (JsonException)
+            {
+                sceneCountPopupWindow?.SetPlaybackStatus("VLC 回傳資料無法解析");
+            }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is NotSupportedException)
+            {
+                sceneCountPopupWindow?.SetPlaybackStatus(ex.Message);
+            }
+            finally
+            {
+                playbackControlLock.Release();
+            }
+        }
+
+        private void RefreshRememberedPositionText()
+        {
+            string text = rememberedPlaybackPositionSeconds is int seconds
+                ? "已記錄：" + FormatPlaybackPositionChinese(seconds)
+                : "尚未記錄播放時間";
+            sceneCountPopupWindow?.SetPlaybackStatus(text);
+        }
+
+        private static string FormatPlaybackPosition(int totalSeconds)
+        {
+            int hours = totalSeconds / 3600;
+            int minutes = totalSeconds % 3600 / 60;
+            int seconds = totalSeconds % 60;
+            return $"{hours:00}:{minutes:00}:{seconds:00}";
+        }
+
+        private static string FormatPlaybackPositionChinese(int totalSeconds)
+        {
+            int hours = totalSeconds / 3600;
+            int minutes = totalSeconds % 3600 / 60;
+            int seconds = totalSeconds % 60;
+            return $"{hours:00} 小時 {minutes:00} 分 {seconds:00} 秒";
+        }
+
+        private void RestoreSceneCountPopupPosition(SceneCountPopupWindow popup)
+        {
+            if (TryLoadDoubleSetting("SceneCountPopup.Left", out double left) &&
+                TryLoadDoubleSetting("SceneCountPopup.Top", out double top))
+            {
+                popup.Left = left;
+                popup.Top = top;
+                return;
+            }
+
+            popup.Left = Left + (ActualWidth - popup.Width) / 2;
+            popup.Top = Top + (ActualHeight - popup.Height) / 2;
+        }
+
+        private void SaveSceneCountPopupPosition()
+        {
+            if (sceneCountPopupWindow == null)
+                return;
+
+            if (double.IsNaN(sceneCountPopupWindow.Left) || double.IsNaN(sceneCountPopupWindow.Top))
+                return;
+
+            SaveSetting("SceneCountPopup.Left", sceneCountPopupWindow.Left.ToString(CultureInfo.InvariantCulture));
+            SaveSetting("SceneCountPopup.Top", sceneCountPopupWindow.Top.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private bool TryLoadDoubleSetting(string key, out double value)
+        {
+            string text = LoadSetting(key, string.Empty);
+            return double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
         }
 
         private void ScanButton_Click(object sender, RoutedEventArgs e)
@@ -292,7 +747,15 @@ namespace VideoDB
         private void OptionsButton_Click(object sender, RoutedEventArgs e)
         {
             ScanLocationsWindow dialog =
-                new ScanLocationsWindow(LoadScanLocations(), LoadSetting("MpcPath", DefaultMpcPath))
+                new ScanLocationsWindow(
+                    LoadScanLocations(),
+                    LoadSetting("MpcPath", DefaultMpcPath),
+                    currentTheme,
+                    LoadSetting("PlayerMode", "Auto"),
+                    LoadSetting("VlcPath", DefaultVlcPath),
+                    LoadSetting("VlcHost", "127.0.0.1"),
+                    LoadSetting("VlcPort", "8080"),
+                    LoadSetting("VlcPassword", string.Empty))
                 {
                     Owner = this
                 };
@@ -302,18 +765,24 @@ namespace VideoDB
 
             SaveScanLocations(dialog.ScanLocations);
             SaveSetting("MpcPath", dialog.MpcPath);
+            SaveSetting("PlayerMode", dialog.PlayerMode);
+            SaveSetting("VlcPath", dialog.VlcPath);
+            SaveSetting("VlcHost", dialog.VlcHost);
+            SaveSetting("VlcPort", dialog.VlcPort);
+            SaveSetting("VlcPassword", dialog.VlcPassword);
+            ApplyTheme(dialog.Theme);
+            SaveSetting("Theme", currentTheme);
             StatusTextBlock.Text = "Scan locations saved";
         }
 
-        private void ThemeToggleButton_Click(object sender, RoutedEventArgs e)
+        private void CaptureSceneButton_Click(object sender, RoutedEventArgs e)
         {
-            string nextTheme =
-                string.Equals(currentTheme, "Dark", StringComparison.OrdinalIgnoreCase)
-                    ? "Light"
-                    : "Dark";
+            _ = CaptureEventFromMpcAsync();
+        }
 
-            ApplyTheme(nextTheme);
-            SaveSetting("Theme", currentTheme);
+        private void MpcToolButton_Click(object sender, RoutedEventArgs e)
+        {
+            ShowSceneCountToolPopup();
         }
 
         private void WriteIdsButton_Click(object sender, RoutedEventArgs e)
@@ -563,11 +1032,11 @@ namespace VideoDB
 
             try
             {
-                MpcStatus? status = await GetMpcStatusAsync();
+                MpcStatus? status = await GetActiveMediaPlayerStatusAsync();
 
                 if (status == null || string.IsNullOrWhiteSpace(status.Path))
                 {
-                    MessageBox.Show("Could not read MPC-HC status. Enable MPC-HC Web Interface on port 13579.");
+                    MessageBox.Show("Could not read the active player's time and file path. Check MPC/VLC settings in Options.");
                     return;
                 }
 
@@ -578,6 +1047,8 @@ namespace VideoDB
                     status.Time,
                     LoadDictionaryNames("Tags"),
                     LoadDictionaryNames("Actresses"),
+                    LoadRecentDictionaryNames("Tags", "EventTags", "TagID", 20),
+                    LoadRecentDictionaryNames("Actresses", "EventActresses", "ActressID", 10),
                     LoadScenesByVideoId(video.ID))
                 {
                     Owner = this
@@ -598,11 +1069,19 @@ namespace VideoDB
             }
             catch (HttpRequestException)
             {
-                MessageBox.Show("MPC-HC Web Interface is not reachable. Enable MPC-HC Web Interface on port 13579.");
+                MessageBox.Show("The configured player interface is not reachable. Check MPC/VLC settings in Options.");
             }
             catch (TaskCanceledException)
             {
-                MessageBox.Show("MPC-HC Web Interface did not respond.");
+                MessageBox.Show("The configured player did not respond.");
+            }
+            catch (JsonException)
+            {
+                MessageBox.Show("VLC returned an unreadable response.");
+            }
+            catch (InvalidOperationException ex)
+            {
+                MessageBox.Show(ex.Message);
             }
             finally
             {
@@ -620,18 +1099,33 @@ namespace VideoDB
                 return;
             }
 
-            string mpcPath = LoadSetting("MpcPath", DefaultMpcPath);
+            MediaPlayerKind player = GetConfiguredPlayerMode();
 
-            if (!File.Exists(mpcPath))
+            if (player == MediaPlayerKind.Auto)
             {
-                MessageBox.Show("MPC-HC path is not valid. Set it in Options.");
+                player = Process.GetProcessesByName("vlc").Length > 0
+                    ? MediaPlayerKind.Vlc
+                    : MediaPlayerKind.Mpc;
+            }
+
+            string playerPath = player == MediaPlayerKind.Vlc
+                ? LoadSetting("VlcPath", DefaultVlcPath)
+                : LoadSetting("MpcPath", DefaultMpcPath);
+
+            if (!File.Exists(playerPath))
+            {
+                MessageBox.Show((player == MediaPlayerKind.Vlc ? "VLC" : "MPC-HC") + " path is not valid. Set it in Options.");
                 return;
             }
 
+            string arguments = player == MediaPlayerKind.Vlc
+                ? "--start-time=" + TimeToSeconds(scene.Time).ToString(CultureInfo.InvariantCulture) + " \"" + scene.Path + "\""
+                : "\"" + scene.Path + "\" /startpos " + scene.Time;
+
             Process.Start(new ProcessStartInfo()
             {
-                FileName = mpcPath,
-                Arguments = "\"" + scene.Path + "\" /startpos " + scene.Time,
+                FileName = playerPath,
+                Arguments = arguments,
                 UseShellExecute = true
             });
         }
@@ -960,6 +1454,11 @@ namespace VideoDB
             MigrateLegacyTags(connection);
             EnsureDefaultScanLocation(connection);
             EnsureDefaultSetting(connection, "MpcPath", DefaultMpcPath);
+            EnsureDefaultSetting(connection, "PlayerMode", "Auto");
+            EnsureDefaultSetting(connection, "VlcPath", DefaultVlcPath);
+            EnsureDefaultSetting(connection, "VlcHost", "127.0.0.1");
+            EnsureDefaultSetting(connection, "VlcPort", "8080");
+            EnsureDefaultSetting(connection, "VlcPassword", string.Empty);
         }
 
         private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)
@@ -1559,6 +2058,109 @@ ORDER BY Events.Time";
             return result;
         }
 
+        private SceneCountLookupResult GetRecordedSceneCountForMpcPath(string path)
+        {
+            using SqliteConnection connection = new SqliteConnection(DatabasePath);
+            connection.Open();
+
+            SceneCountLookupResult? result = FindSceneCountByPath(connection, path);
+
+            if (result != null)
+                return result;
+
+            string normalizedPath = NormalizeFilePath(path);
+
+            if (!string.Equals(path, normalizedPath, StringComparison.OrdinalIgnoreCase))
+            {
+                result = FindSceneCountByPath(connection, normalizedPath);
+
+                if (result != null)
+                    return result;
+            }
+
+            IEnumerable<string> candidateIds =
+                new[]
+                {
+                    TryReadVideoIdMetadata(path),
+                    TryParseVideoID(Path.GetFileNameWithoutExtension(path))
+                }
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x!)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+
+            foreach (string candidateId in candidateIds)
+            {
+                result = FindSceneCountByVideoId(connection, candidateId);
+
+                if (result != null)
+                    return result;
+            }
+
+            return new SceneCountLookupResult();
+        }
+
+        private SceneCountLookupResult? FindSceneCountByPath(SqliteConnection connection, string path)
+        {
+            using SqliteCommand command =
+                new SqliteCommand(
+                    @"
+SELECT
+    Videos.ID,
+    COUNT(Events.ID)
+FROM Videos
+LEFT JOIN Events ON Events.VideoID = Videos.ID
+WHERE Videos.Path = $path COLLATE NOCASE
+GROUP BY Videos.ID
+LIMIT 1",
+                    connection
+                );
+
+            command.Parameters.AddWithValue("$path", path);
+
+            using SqliteDataReader reader = command.ExecuteReader();
+
+            if (!reader.Read())
+                return null;
+
+            return new SceneCountLookupResult()
+            {
+                VideoFound = true,
+                VideoID = reader.GetString(0),
+                SceneCount = Convert.ToInt32(reader.GetInt64(1), CultureInfo.InvariantCulture)
+            };
+        }
+
+        private SceneCountLookupResult? FindSceneCountByVideoId(SqliteConnection connection, string videoId)
+        {
+            using SqliteCommand command =
+                new SqliteCommand(
+                    @"
+SELECT
+    Videos.ID,
+    COUNT(Events.ID)
+FROM Videos
+LEFT JOIN Events ON Events.VideoID = Videos.ID
+WHERE Videos.ID = $videoId COLLATE NOCASE
+GROUP BY Videos.ID
+LIMIT 1",
+                    connection
+                );
+
+            command.Parameters.AddWithValue("$videoId", videoId);
+
+            using SqliteDataReader reader = command.ExecuteReader();
+
+            if (!reader.Read())
+                return null;
+
+            return new SceneCountLookupResult()
+            {
+                VideoFound = true,
+                VideoID = reader.GetString(0),
+                SceneCount = Convert.ToInt32(reader.GetInt64(1), CultureInfo.InvariantCulture)
+            };
+        }
+
         private List<UsageItem> LoadUsage(string dictionaryTable, string relationTable, string relationIdColumn)
         {
             using SqliteConnection connection = new SqliteConnection(DatabasePath);
@@ -1596,6 +2198,31 @@ ORDER BY UsageCount DESC, d.Name ASC";
             connection.Open();
 
             using SqliteCommand command = new SqliteCommand("SELECT Name FROM " + table + " ORDER BY Name", connection);
+            using SqliteDataReader reader = command.ExecuteReader();
+            List<string> names = new List<string>();
+
+            while (reader.Read())
+            {
+                names.Add(reader.GetString(0));
+            }
+
+            return names;
+        }
+
+        private List<string> LoadRecentDictionaryNames(string dictionaryTable, string relationTable, string relationIdColumn, int limit)
+        {
+            using SqliteConnection connection = new SqliteConnection(DatabasePath);
+            connection.Open();
+
+            string sql = @"SELECT d.Name, MAX(r.EventID) AS LastEventID
+FROM " + relationTable + @" r
+INNER JOIN " + dictionaryTable + @" d ON d.ID = r." + relationIdColumn + @"
+GROUP BY d.ID, d.Name
+ORDER BY LastEventID DESC, d.Name ASC
+LIMIT $limit";
+
+            using SqliteCommand command = new SqliteCommand(sql, connection);
+            command.Parameters.AddWithValue("$limit", limit);
             using SqliteDataReader reader = command.ExecuteReader();
             List<string> names = new List<string>();
 
@@ -2030,14 +2657,192 @@ WHERE ID = $id";
 
             string path = WebUtility.HtmlDecode(match.Groups["path"].Value).Trim();
             string positionText = WebUtility.HtmlDecode(match.Groups["positionText"].Value).Trim();
+            int positionSeconds = int.Parse(match.Groups["position"].Value, CultureInfo.InvariantCulture) / 1000;
+            int durationSeconds = int.Parse(match.Groups["duration"].Value, CultureInfo.InvariantCulture) / 1000;
 
             if (!TryNormalizeEventTime(positionText, out string normalizedTime))
             {
-                int seconds = int.Parse(match.Groups["position"].Value, CultureInfo.InvariantCulture) / 1000;
-                normalizedTime = SecondsToMPCFormat(seconds);
+                normalizedTime = SecondsToMPCFormat(positionSeconds);
             }
 
-            return new MpcStatus() { Path = path, Time = normalizedTime };
+            return new MpcStatus()
+            {
+                Player = MediaPlayerKind.Mpc,
+                Path = path,
+                Time = normalizedTime,
+                PositionSeconds = positionSeconds,
+                DurationSeconds = durationSeconds,
+                IsPlaying = string.Equals(match.Groups["state"].Value, "Playing", StringComparison.OrdinalIgnoreCase)
+            };
+        }
+
+        private async Task<MpcStatus?> GetVlcStatusAsync()
+        {
+            using JsonDocument statusDocument = await GetVlcJsonAsync("/requests/status.json");
+            JsonElement root = statusDocument.RootElement;
+            int positionSeconds = GetJsonInt32(root, "time");
+            int durationSeconds = GetJsonInt32(root, "length");
+            string state = GetJsonString(root, "state");
+            string path = FindVlcMediaPath(root);
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                using JsonDocument playlistDocument = await GetVlcJsonAsync("/requests/playlist.json");
+                path = FindCurrentVlcPlaylistPath(playlistDocument.RootElement);
+            }
+
+            return new MpcStatus()
+            {
+                Player = MediaPlayerKind.Vlc,
+                Path = path,
+                Time = SecondsToMPCFormat(positionSeconds),
+                PositionSeconds = positionSeconds,
+                DurationSeconds = durationSeconds,
+                IsPlaying = string.Equals(state, "playing", StringComparison.OrdinalIgnoreCase)
+            };
+        }
+
+        private async Task<JsonDocument> GetVlcJsonAsync(string path, string query = "")
+        {
+            string host = LoadSetting("VlcHost", "127.0.0.1");
+
+            if (!int.TryParse(LoadSetting("VlcPort", "8080"), NumberStyles.Integer, CultureInfo.InvariantCulture, out int port))
+                port = 8080;
+
+            UriBuilder uri = new UriBuilder("http", host, port, path)
+            {
+                Query = query
+            };
+            string credentials = ":" + LoadSetting("VlcPassword", string.Empty);
+            string authorization = Convert.ToBase64String(Encoding.UTF8.GetBytes(credentials));
+            HttpResponseMessage? response = null;
+
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                using HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, uri.Uri);
+                request.Headers.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authorization);
+
+                try
+                {
+                    response = await httpClient.SendAsync(request);
+                    break;
+                }
+                catch (HttpRequestException) when (attempt < 3)
+                {
+                    await Task.Delay(400);
+                }
+            }
+
+            if (response == null)
+                throw new HttpRequestException("VLC HTTP interface is not reachable.");
+
+            using (response)
+            {
+                if (response.StatusCode == HttpStatusCode.Unauthorized)
+                    throw new InvalidOperationException("VLC HTTP 密碼錯誤，請到 Options 重新輸入");
+
+            response.EnsureSuccessStatusCode();
+            await using Stream stream = await response.Content.ReadAsStreamAsync();
+            return await JsonDocument.ParseAsync(stream);
+            }
+        }
+
+        private static int GetJsonInt32(JsonElement element, string propertyName)
+        {
+            if (!element.TryGetProperty(propertyName, out JsonElement value))
+                return 0;
+
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int number))
+                return number;
+
+            return int.TryParse(value.ToString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out number)
+                ? number
+                : 0;
+        }
+
+        private static string GetJsonString(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out JsonElement value)
+                ? value.ToString()
+                : string.Empty;
+        }
+
+        private static string FindVlcMediaPath(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (string propertyName in new[] { "url", "uri" })
+                {
+                    if (element.TryGetProperty(propertyName, out JsonElement value))
+                    {
+                        string path = ConvertVlcUriToPath(value.ToString());
+
+                        if (!string.IsNullOrWhiteSpace(path))
+                            return path;
+                    }
+                }
+
+                foreach (JsonProperty property in element.EnumerateObject())
+                {
+                    string path = FindVlcMediaPath(property.Value);
+
+                    if (!string.IsNullOrWhiteSpace(path))
+                        return path;
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement item in element.EnumerateArray())
+                {
+                    string path = FindVlcMediaPath(item);
+
+                    if (!string.IsNullOrWhiteSpace(path))
+                        return path;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string FindCurrentVlcPlaylistPath(JsonElement element)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                bool isCurrent = element.TryGetProperty("current", out JsonElement current) &&
+                                 !string.IsNullOrWhiteSpace(current.ToString());
+
+                if (isCurrent && element.TryGetProperty("uri", out JsonElement uri))
+                    return ConvertVlcUriToPath(uri.ToString());
+
+                foreach (JsonProperty property in element.EnumerateObject())
+                {
+                    string path = FindCurrentVlcPlaylistPath(property.Value);
+
+                    if (!string.IsNullOrWhiteSpace(path))
+                        return path;
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+            {
+                foreach (JsonElement item in element.EnumerateArray())
+                {
+                    string path = FindCurrentVlcPlaylistPath(item);
+
+                    if (!string.IsNullOrWhiteSpace(path))
+                        return path;
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string ConvertVlcUriToPath(string value)
+        {
+            if (Uri.TryCreate(value, UriKind.Absolute, out Uri? uri) && uri.IsFile)
+                return uri.LocalPath;
+
+            return Path.IsPathRooted(value) ? value : string.Empty;
         }
 
         private string? TryParseVideoID(string filename)

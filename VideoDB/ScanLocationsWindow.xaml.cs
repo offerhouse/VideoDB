@@ -8,7 +8,15 @@ namespace VideoDB
     {
         private readonly ObservableCollection<ScanLocationItem> locations;
 
-        public ScanLocationsWindow(List<ScanLocationItem> scanLocations, string mpcPath)
+        public ScanLocationsWindow(
+            List<ScanLocationItem> scanLocations,
+            string mpcPath,
+            string theme,
+            string playerMode,
+            string vlcPath,
+            string vlcHost,
+            string vlcPort,
+            string vlcPassword)
         {
             InitializeComponent();
 
@@ -25,11 +33,48 @@ namespace VideoDB
 
             LocationGrid.ItemsSource = locations;
             MpcPathBox.Text = mpcPath;
+            VlcPathBox.Text = vlcPath;
+            VlcHostBox.Text = vlcHost;
+            VlcPortBox.Text = vlcPort;
+            VlcPasswordBox.Password = vlcPassword;
+            PlayerModeBox.SelectedIndex =
+                string.Equals(playerMode, "VLC", StringComparison.OrdinalIgnoreCase) ? 2 :
+                string.Equals(playerMode, "MPC", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            ThemeBox.SelectedIndex =
+                string.Equals(theme, "Light", StringComparison.OrdinalIgnoreCase)
+                    ? 1
+                    : 0;
         }
 
         public List<ScanLocationItem> ScanLocations => locations.ToList();
 
         public string MpcPath => MpcPathBox.Text.Trim();
+        public string VlcPath => VlcPathBox.Text.Trim();
+        public string VlcHost => VlcHostBox.Text.Trim();
+        public string VlcPort => VlcPortBox.Text.Trim();
+        public string VlcPassword => VlcPasswordBox.Password;
+
+        public string PlayerMode
+        {
+            get
+            {
+                if (PlayerModeBox.SelectedItem is System.Windows.Controls.ComboBoxItem item)
+                    return item.Content?.ToString() ?? "Auto";
+
+                return "Auto";
+            }
+        }
+
+        public string Theme
+        {
+            get
+            {
+                if (ThemeBox.SelectedItem is System.Windows.Controls.ComboBoxItem item)
+                    return item.Content?.ToString() ?? "Dark";
+
+                return "Dark";
+            }
+        }
 
         private void AddFolderButton_Click(object sender, RoutedEventArgs e)
         {
@@ -80,8 +125,27 @@ namespace VideoDB
             }
         }
 
+        private void BrowseVlcButton_Click(object sender, RoutedEventArgs e)
+        {
+            OpenFileDialog dialog = new OpenFileDialog()
+            {
+                Title = "Select VLC executable",
+                Filter = "Executable files (*.exe)|*.exe|All files (*.*)|*.*",
+                FileName = "vlc.exe"
+            };
+
+            if (dialog.ShowDialog(this) == true)
+                VlcPathBox.Text = dialog.FileName;
+        }
+
         private void SaveButton_Click(object sender, RoutedEventArgs e)
         {
+            if (!int.TryParse(VlcPort, out int port) || port < 1 || port > 65535)
+            {
+                MessageBox.Show("VLC port must be between 1 and 65535.");
+                return;
+            }
+
             DialogResult = true;
         }
 

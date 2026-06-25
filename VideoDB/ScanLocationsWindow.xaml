@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Scan Locations"
-        Height="420"
+        Height="570"
         Width="760"
         WindowStartupLocation="CenterOwner"
         MinHeight="340"
@@ -11,24 +11,77 @@
         Foreground="{DynamicResource TextBrush}">
     <DockPanel Margin="12" Background="{DynamicResource AppBackgroundBrush}">
         <Grid DockPanel.Dock="Top" Margin="0,0,0,12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="92"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="86"/>
             </Grid.ColumnDefinitions>
 
-            <TextBlock Grid.Column="0"
+            <TextBlock Grid.Row="0" Grid.Column="0" Text="Player" VerticalAlignment="Center" Margin="0,0,8,8"/>
+            <ComboBox Grid.Row="0" Grid.Column="1" x:Name="PlayerModeBox" Width="140" Height="28"
+                      HorizontalAlignment="Left" Margin="0,0,0,8">
+                <ComboBoxItem Content="Auto"/>
+                <ComboBoxItem Content="MPC"/>
+                <ComboBoxItem Content="VLC"/>
+            </ComboBox>
+
+            <TextBlock Grid.Row="1"
+                       Grid.Column="0"
                        Text="MPC-HC"
                        VerticalAlignment="Center"
-                       Margin="0,0,8,0"/>
-            <TextBox Grid.Column="1"
+                       Margin="0,0,8,8"/>
+            <TextBox Grid.Row="1"
+                     Grid.Column="1"
                      x:Name="MpcPathBox"
                      Height="28"
-                     Margin="0,0,8,0"/>
-            <Button Grid.Column="2"
+                     Margin="0,0,8,8"/>
+            <Button Grid.Row="1"
+                    Grid.Column="2"
                     Content="Browse"
                     Height="28"
+                    Margin="0,0,0,8"
                     Click="BrowseMpcButton_Click"/>
+
+            <TextBlock Grid.Row="2" Grid.Column="0" Text="VLC" VerticalAlignment="Center" Margin="0,0,8,8"/>
+            <TextBox Grid.Row="2" Grid.Column="1" x:Name="VlcPathBox" Height="28" Margin="0,0,8,8"/>
+            <Button Grid.Row="2" Grid.Column="2" Content="Browse" Height="28" Margin="0,0,0,8"
+                    Click="BrowseVlcButton_Click"/>
+
+            <TextBlock Grid.Row="3" Grid.Column="0" Text="VLC Host" VerticalAlignment="Center" Margin="0,0,8,8"/>
+            <TextBox Grid.Row="3" Grid.Column="1" x:Name="VlcHostBox" Width="180" Height="28"
+                     HorizontalAlignment="Left" Margin="0,0,8,8"/>
+
+            <TextBlock Grid.Row="4" Grid.Column="0" Text="VLC Port" VerticalAlignment="Center" Margin="0,0,8,8"/>
+            <TextBox Grid.Row="4" Grid.Column="1" x:Name="VlcPortBox" Width="100" Height="28"
+                     HorizontalAlignment="Left" Margin="0,0,8,8"/>
+
+            <TextBlock Grid.Row="5" Grid.Column="0" Text="VLC Password" VerticalAlignment="Center" Margin="0,0,8,8"/>
+            <PasswordBox Grid.Row="5" Grid.Column="1" x:Name="VlcPasswordBox" Width="220" Height="28"
+                         HorizontalAlignment="Left" Margin="0,0,8,8"/>
+
+            <TextBlock Grid.Row="6"
+                       Grid.Column="0"
+                       Text="Theme"
+                       VerticalAlignment="Center"
+                       Margin="0,0,8,0"/>
+            <ComboBox Grid.Row="6"
+                      Grid.Column="1"
+                      x:Name="ThemeBox"
+                      Width="140"
+                      Height="28"
+                      HorizontalAlignment="Left">
+                <ComboBoxItem Content="Dark"/>
+                <ComboBoxItem Content="Light"/>
+            </ComboBox>
         </Grid>
 
         <StackPanel DockPanel.Dock="Bottom"

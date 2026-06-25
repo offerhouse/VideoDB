@@ -14,6 +14,8 @@ namespace VideoDB
             string time,
             List<string> tags,
             List<string> actresses,
+            List<string> recentTags,
+            List<string> recentActresses,
             List<MainWindow.SceneItem> existingScenes)
         {
             InitializeComponent();
@@ -22,6 +24,8 @@ namespace VideoDB
             TimeBox.Text = time;
             TagBox.ItemsSource = tags;
             ActressBox.ItemsSource = actresses;
+            RecentTagItemsControl.ItemsSource = recentTags;
+            RecentActressItemsControl.ItemsSource = recentActresses;
             TagChipItemsControl.ItemsSource = selectedTags;
             ActressChipItemsControl.ItemsSource = selectedActresses;
             ExistingSceneItemsControl.ItemsSource = existingScenes;
@@ -69,6 +73,24 @@ namespace VideoDB
             AddToken(ActressBox.Text, selectedActresses);
             ActressBox.Text = string.Empty;
             ActressBox.Focus();
+        }
+
+        private void RecentTagButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && button.Content is string tag)
+            {
+                AddToken(tag, selectedTags);
+                TagBox.Focus();
+            }
+        }
+
+        private void RecentActressButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button button && button.Content is string actress)
+            {
+                AddToken(actress, selectedActresses);
+                ActressBox.Focus();
+            }
         }
 
         private void RemoveTagButton_Click(object sender, RoutedEventArgs e)
